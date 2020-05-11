@@ -1,5 +1,5 @@
-`ecjson`
-===========
+erlang-json-lib
+==========
 
 An Erlang component on JSON.
 
