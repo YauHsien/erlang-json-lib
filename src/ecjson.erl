@@ -123,19 +123,23 @@ check_and_condense(<<$[/utf8,Rest/binary>> = _JSON_string, [array|States], Colum
     _DEBUG = debug, io:fwrite("~n~p", [{20, check_and_condense, [_JSON_string, [array|States], Column, Row, Condensed]}]),
     check_and_condense(Rest, ['array_$['|States], Column+1, Row, binary:list_to_bin([Condensed,$[]));
 
-check_and_condense(<<WS/utf8,Rest/binary>> = _JSON_string, ['array_$['|_] = States, Column, Row, Condensed)
-  when ?isWS(WS) ->
+check_and_condense(<<WS/utf8,Rest/binary>> = _JSON_string, [Non_terminal|_] = States, Column, Row, Condensed)
+  when ?isWS(WS) andalso
+       (Non_terminal =:= 'array_$[' orelse
+        Non_terminal =:= 'array_$[_elements') ->
     _DEBUG = debug, io:fwrite("~n~p", [{21, check_and_condense, [_JSON_string, States, Column, Row, Condensed]}]),
     {Column1, Row1} = next_coordinates(WS, Column, Row),
     check_and_condense(Rest, States, Column1, Row1, Condensed);
 
+check_and_condense(<<$]/utf8,Rest/binary>> = _JSON_string, [Non_terminal|States], Column, Row, Condensed)
+  when (Non_terminal =:= 'array_$[' orelse
+        Non_terminal =:= 'array_$[_elements') ->
+    _DEBUG = debug, io:fwrite("~n~p", [{23, check_and_condense, [_JSON_string, [Non_terminal|States], Column, Row, Condensed]}]),
+    check_and_condense(Rest, States, Column+1, Row, binary:list_to_bin([Condensed,$]]));
+
 check_and_condense(JSON_string, ['array_$['|States], Column, Row, Condensed) ->
     _DEBUG = debug, io:fwrite("~n~p", [{22, check_and_condense, [JSON_string, ['array_$['|States], Column, Row, Condensed]}]),
     check_and_condense(JSON_string, [elements,'array_$[_elements'|States], Column, Row, Condensed);
-
-check_and_condense(<<$]/utf8,Rest/binary>> = _JSON_string, ['array_$[_elements'|States], Column, Row, Condensed) ->
-    _DEBUG = debug, io:fwrite("~n~p", [{23, check_and_condense, [_JSON_string, ['array_$[_elements'|States], Column, Row, Condensed]}]),
-    check_and_condense(Rest, States, Column+1, Row, binary:list_to_bin([Condensed,$]]));
 
 %% -- Elements -------------------------------------------------------
 check_and_condense(JSON_string, [elements|States], Column, Row, Condensed) ->
@@ -321,9 +325,65 @@ cnc_object_test() ->
            \"null\": null
     } ">>)).
 
-cnc_object_failed_test() ->
+cnc_object_failed_1_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<$},_/binary>>, _States, 5, 10, _Condensed]},
+                 check_and_condense(<<" { 
+           \"object\" : {
+              \"hello\": \"world\"
+           } , 
+         \"array\": [ \"hello,world\", { \"hello\": \"world\" }, true, false, null ],
+           \"string\": \"hello,world\",
+           \"true\": true,
+           \"false\": false,
+           \"null\": null,
+    } ">>)).
+
+cnc_object_failed_2_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<${,_/binary>>, _States, 2, 1, _Condensed]},
+                check_and_condense(<<"{{\"hello\":\"world\"}}">>)).
+
+cnc_object_failed_3_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<$1,_/binary>>, _States, 2, 1, _Condensed]},
+                 check_and_condense(<<"{1}">>)).
+
+cnc_object_failed_4_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<$T,_/binary>>, _States, 10, 1, _Condensed]},
+                 check_and_condense(<<"{\"hello\":TRUE}">>)).
+
+cnc_object_failed_5_test() ->
     ?assertMatch({badsymbol, check_and_condense, [<<>>, [value,element_value], 2, 1, <<>>]},
                  check_and_condense(<<" ">>)).
+
+cnc_object_failed_6_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<>>, _States, 2, 1, _Condensed]},
+                 check_and_condense(<<"{">>)).
+
+cnc_object_failed_7_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<$}>>, _States, 3, 1, _Condensed]},
+                 check_and_condense(<<"{}}">>)).
+
+cnc_array_test() ->
+    ?assertMatch({ok, <<"[{\"hello\":\"world\",\"world\":[1,true,false,null]},\"hello,world\",2,true,false,null]">>},
+                 check_and_condense(<<" [
+         { \"hello\"  : \"world\", \"world\":[ 1, true, false, null ] },
+         \"hello,world\",
+        2,
+          true , 
+        false,
+        null
+    ] ">>)).
+
+cnc_array_failed_1_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<>>, _States, 2, 1, _Condensed]},
+                 check_and_condense(<<"[">>)).
+
+cnc_array_failed_2_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<$]>>, _States, 3, 1, _Condensed]},
+                 check_and_condense(<<"[]]">>)).
+
+cnc_array_failed_3_test() ->
+    ?assertMatch({badsymbol, check_and_condense, [<<$:,_/binary>>, _States, 10, 1, _Condensed]},
+                 check_and_condense(<<"[\"hello\" :\"world\"]">>)).
 
 cnc_integer_test() ->
     %% Number test
@@ -350,6 +410,15 @@ cnc_string_test() ->
                  check_and_condense(<<" \n\"   hello,world 我要 \\n \\u10ffFF \" "/utf8>>)),
     ?assertMatch({badsymbol, check_and_condense, [<<$\x{000A},_/binary>>, _States, 3, 2, _Condensed]},
                  check_and_condense(<<" \n\" \nhello,world \" ">>)).
+
+cnc_true_test() ->
+    ?assertMatch({ok, <<"true">>}, check_and_condense(<<"true">>)).
+
+cnc_false_test() ->
+    ?assertMatch({ok, <<"false">>}, check_and_condense(<<"false">>)).
+
+cnc_null_test() ->
+    ?assertMatch({ok, <<"null">>}, check_and_condense(<<"null">>)).
 
 next_coordinates($\x{000A}, _Column, Row) ->
     {1, Row+1};
